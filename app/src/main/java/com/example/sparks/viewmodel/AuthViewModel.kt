@@ -1,19 +1,20 @@
 package com.example.sparks.viewmodel
 
-import android.util.Log
 import android.net.Uri
+import android.util.Log
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
+import com.example.sparks.model.User
+import com.example.sparks.util.CryptoManager
 import com.google.firebase.auth.FirebaseAuth
 import com.google.firebase.auth.FirebaseUser
 import com.google.firebase.firestore.FirebaseFirestore
-import com.google.firebase.storage.FirebaseStorage
 import com.google.firebase.firestore.SetOptions
+import com.google.firebase.storage.FirebaseStorage
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.tasks.await
-import com.example.sparks.model.User
 
 class AuthViewModel : ViewModel() {
     private val auth: FirebaseAuth = FirebaseAuth.getInstance()
@@ -72,12 +73,16 @@ class AuthViewModel : ViewModel() {
                 return@launch
             }
 
+            // NEW: Generate E2EE Keys for new user
+            val myPublicKey = CryptoManager.checkOrGenerateKeys()
+
             val newUser = User(
                 uid = user.uid,
                 email = user.email ?: "",
                 username = username,
                 firstName = firstName,
-                lastName = lastName
+                lastName = lastName,
+                publicKey = myPublicKey // Save Public Key to Firestore
             )
 
             try {
@@ -118,10 +123,6 @@ class AuthViewModel : ViewModel() {
                     .update("profileImageUrl", downloadUrl.toString())
                     .await()
 
-                // 5. Update Local State (Optional, but good for immediate UI feedback)
-                // We rely on the UI observing Firestore or reloading, but let's refresh current user context if needed.
-                // For now, Firestore real-time listeners in the UI will handle the visual update.
-
             } catch (e: Exception) {
                 _errorMessage.value = "Upload failed: ${e.message}"
             } finally {
@@ -132,7 +133,7 @@ class AuthViewModel : ViewModel() {
 
     // MODIFY Sign Up: Don't write to Firestore yet!
     // We will let the Profile Screen do that.
-    fun signUp(email: String, pass: String, onSignUpSuccess: () -> Unit) { // Added callback
+    fun signUp(email: String, pass: String, onSignUpSuccess: () -> Unit) {
         viewModelScope.launch {
             _isLoading.value = true
             _errorMessage.value = null
@@ -160,6 +161,13 @@ class AuthViewModel : ViewModel() {
                 if (user != null) {
                     saveUserToFirestore(user) // Save to DB (Fixes missing users)
                     _currentUser.value = user
+
+                    // NEW: Ensure E2EE Keys exist (e.g. for re-installs)
+                    val publicKey = CryptoManager.checkOrGenerateKeys()
+                    if (publicKey != null) {
+                        firestore.collection("users").document(user.uid)
+                            .update("publicKey", publicKey)
+                    }
                 }
             } catch (e: Exception) {
                 _errorMessage.value = "Login Error: ${e.message}"
@@ -169,7 +177,8 @@ class AuthViewModel : ViewModel() {
         }
     }
 
-    fun signOut() {
+    // Renamed from signOut to logout to match MainActivity
+    fun logout() {
         auth.signOut()
         _currentUser.value = null
     }

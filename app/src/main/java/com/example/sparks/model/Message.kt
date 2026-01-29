@@ -11,7 +11,7 @@ enum class MessageStatus {
 
 data class Message(
     val id: String = "",
-    val text: String = "",
+    val text: String = "", // This will now hold Encrypted Content (IV:Cipher)
     val senderId: String = "",
     val timestamp: Long = 0L,
     val type: MessageType = MessageType.TEXT,
@@ -22,5 +22,7 @@ data class Message(
     val replyToId: String? = null,
     val replyToName: String? = null,
     val replyToText: String? = null,
-    val replyToImage: String? = null // If replying to an image
+    val replyToImage: String? = null, // If replying to an image
+    // NEW: Map of UserID -> Encrypted AES Key
+    val encryptionKeys: Map<String, String> = emptyMap()
 )

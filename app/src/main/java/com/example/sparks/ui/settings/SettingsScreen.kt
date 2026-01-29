@@ -138,7 +138,7 @@ fun SettingsScreen(
                 modifier = Modifier
                     .fillMaxWidth()
                     .clickable {
-                        authViewModel.signOut()
+                        authViewModel.logout()
                         navController.navigate("auth") {
                             popUpTo(0)
                         }

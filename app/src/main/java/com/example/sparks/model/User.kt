@@ -7,5 +7,6 @@ data class User(
     val firstName: String = "", // Display Name
     val lastName: String = "",
     val profileImageUrl: String? = null,
-    val bio: String = ""
+    val bio: String = "",
+    val publicKey: String? = null // <--- NEW FIELD
 )
