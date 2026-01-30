@@ -4,25 +4,26 @@ import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.combinedClickable
-import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Done
 import androidx.compose.material.icons.filled.DoneAll
+import androidx.compose.material.icons.filled.Lock
 import androidx.compose.material.icons.filled.PlayArrow
+import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.remember
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.Shape
-import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
@@ -30,16 +31,17 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import coil.compose.AsyncImage
-import coil.request.ImageRequest
 import com.example.sparks.model.Message
 import com.example.sparks.model.MessageStatus
 import com.example.sparks.model.MessageType
-import com.example.sparks.ui.theme.SignalBlue
-import com.example.sparks.util.formatMessageTime
+import com.example.sparks.viewmodel.ChatViewModel
 import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
 import kotlin.math.abs
+
+// Fallback color if not defined in your theme
+val SignalBlue = Color(0xFF007AFF)
 
 @OptIn(ExperimentalFoundationApi::class)
 @Composable
@@ -50,15 +52,22 @@ fun MessageBubble(
     modifier: Modifier = Modifier,
     shape: Shape? = null,
     onLongClick: () -> Unit = {},
-    onImageClick: (String) -> Unit = {}
+    onImageClick: (String) -> Unit = {},
+    viewModel: ChatViewModel // <--- REQUIRED FOR E2EE
 ) {
+    val context = LocalContext.current
+    val decryptedCache = viewModel.decryptedContentCache
+
     val bubbleColor = if (isFromMe) SignalBlue else MaterialTheme.colorScheme.tertiary
     val textColor = if (isFromMe) Color.White else MaterialTheme.colorScheme.onSurface
     val alignment = if (isFromMe) Alignment.End else Alignment.Start
     val finalShape = shape ?: RoundedCornerShape(18.dp)
 
     // Timestamp & Status Logic
-    val timeText = SimpleDateFormat("HH:mm", Locale.getDefault()).format(Date(message.timestamp))
+    val timeText = remember(message.timestamp) {
+        SimpleDateFormat("HH:mm", Locale.getDefault()).format(Date(message.timestamp))
+    }
+
     val statusIcon = when (message.status) {
         MessageStatus.SENT -> Icons.Default.Done
         MessageStatus.DELIVERED -> Icons.Default.DoneAll
@@ -109,8 +118,9 @@ fun MessageBubble(
                     .widthIn(min = 80.dp, max = 300.dp)
                     .combinedClickable(
                         onClick = {
-                            if (message.type == MessageType.IMAGE && message.imageUrl != null) {
-                                onImageClick(message.imageUrl)
+                            // If cached image, click opens it
+                            if (message.type == MessageType.IMAGE && viewModel.decryptedContentCache[message.id] != null) {
+                                onImageClick(viewModel.decryptedContentCache[message.id].toString())
                             }
                         },
                         onLongClick = onLongClick
@@ -169,46 +179,162 @@ fun MessageBubble(
                     when (message.type) {
                         MessageType.IMAGE -> {
                             if (message.imageUrl != null) {
-                                Box {
-                                    AsyncImage(
-                                        model = message.imageUrl,
-                                        contentDescription = "Sent image",
-                                        modifier = Modifier.fillMaxWidth().heightIn(max = 300.dp),
-                                        contentScale = ContentScale.Crop
-                                    )
-                                    // Image Timestamp Overlay
+                                // --- SECURITY CHECK ---
+                                val decryptedUri = decryptedCache[message.id]
+
+                                if (decryptedUri != null) {
+                                    // CASE 1: Decrypted & Ready -> Show Image
+                                    Box {
+                                        AsyncImage(
+                                            model = decryptedUri,
+                                            contentDescription = "Sent image",
+                                            modifier = Modifier.fillMaxWidth().heightIn(max = 300.dp),
+                                            contentScale = ContentScale.Crop
+                                        )
+                                        // Image Timestamp Overlay
+                                        Box(
+                                            modifier = Modifier
+                                                .align(Alignment.BottomEnd)
+                                                .padding(6.dp)
+                                                .background(Color.Black.copy(alpha = 0.6f), RoundedCornerShape(10.dp))
+                                                .padding(horizontal = 6.dp, vertical = 2.dp)
+                                        ) {
+                                            Row(verticalAlignment = Alignment.CenterVertically) {
+                                                Text(text = timeText, fontSize = 10.sp, color = Color.White)
+                                                if (isFromMe) {
+                                                    Spacer(modifier = Modifier.width(4.dp))
+                                                    Icon(statusIcon, contentDescription = null, tint = statusTint, modifier = Modifier.size(14.dp))
+                                                }
+                                            }
+                                        }
+                                    }
+                                } else {
+                                    // CASE 2: Encrypted -> Show Lock Spinner
+                                    LaunchedEffect(message.id) {
+                                        viewModel.resolveMedia(message, context)
+                                    }
                                     Box(
                                         modifier = Modifier
-                                            .align(Alignment.BottomEnd)
-                                            .padding(6.dp)
-                                            .background(Color.Black.copy(alpha = 0.6f), RoundedCornerShape(10.dp))
-                                            .padding(horizontal = 6.dp, vertical = 2.dp)
+                                            .fillMaxWidth()
+                                            .height(200.dp)
+                                            .background(Color.Black.copy(alpha = 0.2f)),
+                                        contentAlignment = Alignment.Center
                                     ) {
-                                        Row(verticalAlignment = Alignment.CenterVertically) {
-                                            Text(text = timeText, fontSize = 10.sp, color = Color.White)
+                                        Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                                            Icon(Icons.Default.Lock, contentDescription = null, tint = Color.White)
+                                            Spacer(modifier = Modifier.height(8.dp))
+                                            CircularProgressIndicator(color = Color.White, strokeWidth = 2.dp, modifier = Modifier.size(24.dp))
+                                        }
+                                    }
+                                }
+                            }
+                        }
+
+                        MessageType.VIDEO -> {
+                            if (message.imageUrl != null) {
+                                val decryptedUri = viewModel.decryptedContentCache[message.id]
+
+                                if (decryptedUri != null) {
+                                    // CASE 1: Decrypted & Ready -> Show Thumbnail + Play Button
+                                    Box(
+                                        modifier = Modifier
+                                            .fillMaxWidth()
+                                            .height(200.dp)
+                                            .clip(RoundedCornerShape(8.dp))
+                                            .background(Color.Black)
+                                            .clickable {
+                                                // CLICK: Open Full Screen Player
+                                                // We need to pass the LOCAL URI
+                                                onImageClick(decryptedUri.toString())
+                                            },
+                                        contentAlignment = Alignment.Center
+                                    ) {
+                                        // Optional: You could generate a thumbnail here,
+                                        // but for now we just show a Play Icon on black
+                                        Icon(
+                                            Icons.Default.PlayArrow,
+                                            contentDescription = "Play",
+                                            tint = Color.White,
+                                            modifier = Modifier.size(48.dp)
+                                        )
+
+                                        // Timestamp Overlay
+                                        Box(
+                                            modifier = Modifier
+                                                .align(Alignment.BottomEnd)
+                                                .padding(6.dp)
+                                                .background(Color.Black.copy(alpha = 0.6f), RoundedCornerShape(10.dp))
+                                                .padding(horizontal = 6.dp, vertical = 2.dp)
+                                        ) {
+                                            Row(verticalAlignment = Alignment.CenterVertically) {
+                                                Text(text = timeText, fontSize = 10.sp, color = Color.White)
+                                                if (isFromMe) {
+                                                    Spacer(modifier = Modifier.width(4.dp))
+                                                    Icon(statusIcon, contentDescription = null, tint = statusTint, modifier = Modifier.size(14.dp))
+                                                }
+                                            }
+                                        }
+                                    }
+                                } else {
+                                    // CASE 2: Encrypted -> Show Spinner
+                                    LaunchedEffect(message.id) {
+                                        viewModel.resolveMedia(message, context)
+                                    }
+                                    Box(
+                                        modifier = Modifier
+                                            .fillMaxWidth()
+                                            .height(200.dp)
+                                            .background(Color.Black.copy(alpha = 0.2f)),
+                                        contentAlignment = Alignment.Center
+                                    ) {
+                                        Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                                            Icon(Icons.Default.Lock, contentDescription = null, tint = Color.White)
+                                            Spacer(modifier = Modifier.height(8.dp))
+                                            CircularProgressIndicator(color = Color.White, strokeWidth = 2.dp, modifier = Modifier.size(24.dp))
+                                        }
+                                    }
+                                }
+                            }
+                        }
+
+                        MessageType.AUDIO -> {
+                            if (message.imageUrl != null) {
+                                // --- AUDIO SECURITY CHECK ---
+                                val decryptedUri = viewModel.decryptedContentCache[message.id]
+
+                                if (decryptedUri != null) {
+                                    // CASE 1: Decrypted & Ready -> Show Player
+                                    Column {
+                                        // Pass the LOCAL decrypted file URI to the player
+                                        ChatAudioBubble(audioUrl = decryptedUri.toString(), tint = textColor)
+
+                                        // Audio Timestamp
+                                        Row(
+                                            modifier = Modifier.align(Alignment.End).padding(top = 4.dp),
+                                            verticalAlignment = Alignment.CenterVertically
+                                        ) {
+                                            Text(text = timeText, fontSize = 10.sp, color = timeColor)
                                             if (isFromMe) {
                                                 Spacer(modifier = Modifier.width(4.dp))
                                                 Icon(statusIcon, contentDescription = null, tint = statusTint, modifier = Modifier.size(14.dp))
                                             }
                                         }
                                     }
-                                }
-                            }
-                        }
-                        MessageType.AUDIO -> {
-                            if (message.imageUrl != null) {
-                                Column {
-                                    AudioPlayerBubble(audioUrl = message.imageUrl, tint = textColor)
-                                    // Audio Timestamp
-                                    Row(
-                                        modifier = Modifier.align(Alignment.End).padding(top = 4.dp),
-                                        verticalAlignment = Alignment.CenterVertically
-                                    ) {
-                                        Text(text = timeText, fontSize = 10.sp, color = timeColor)
-                                        if (isFromMe) {
-                                            Spacer(modifier = Modifier.width(4.dp))
-                                            Icon(statusIcon, contentDescription = null, tint = statusTint, modifier = Modifier.size(14.dp))
-                                        }
+                                } else {
+                                    // CASE 2: Encrypted -> Trigger Decrypt
+                                    LaunchedEffect(message.id) {
+                                        viewModel.resolveMedia(message, context)
+                                    }
+
+                                    // Show "Decrypting Audio..." placeholder
+                                    Row(verticalAlignment = Alignment.CenterVertically) {
+                                        CircularProgressIndicator(
+                                            color = textColor,
+                                            strokeWidth = 2.dp,
+                                            modifier = Modifier.size(16.dp)
+                                        )
+                                        Spacer(modifier = Modifier.width(8.dp))
+                                        Text("Decrypting voice...", color = textColor, fontSize = 12.sp)
                                     }
                                 }
                             }
@@ -295,15 +421,16 @@ fun MessageBubble(
 fun isEmojiOnly(text: String): Boolean {
     if (text.isBlank()) return false
     val trimmed = text.trim()
-    var emojiCount = 0
-    var i = 0
     val length = trimmed.length
+    var i = 0
+    var emojiCount = 0
 
     while (i < length) {
         val codePoint = trimmed.codePointAt(i)
         val charCount = Character.charCount(codePoint)
         val type = Character.getType(codePoint)
 
+        // Very basic check for symbols/surrogates
         val isSymbol = type == Character.SURROGATE.toInt() ||
                 type == Character.OTHER_SYMBOL.toInt() ||
                 type == Character.MATH_SYMBOL.toInt() ||
@@ -314,6 +441,15 @@ fun isEmojiOnly(text: String): Boolean {
         emojiCount++
         i += charCount
     }
-    // Limit to short strings (approx 1-3 emojis)
-    return length < 12
+    return length < 12 // Arbitrary limit for "Jumbo" sizing
+}
+
+// FIX: Renamed function to avoid conflict
+@Composable
+fun ChatAudioBubble(audioUrl: String, tint: Color) {
+    Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.padding(bottom = 8.dp)) {
+        Icon(Icons.Default.PlayArrow, contentDescription = "Play", tint = tint)
+        Spacer(modifier = Modifier.width(8.dp))
+        Text("Voice Message", color = tint)
+    }
 }

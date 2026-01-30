@@ -8,5 +8,16 @@ data class User(
     val lastName: String = "",
     val profileImageUrl: String? = null,
     val bio: String = "",
-    val publicKey: String? = null // <--- NEW FIELD
+    // Privacy & Security
+    val publicKey: String? = null,
+    val blockedIds: List<String> = emptyList(),
+
+    // Notifications
+    val fcmToken: String? = null, // <--- ADD THIS
+
+    // NEW FIELDS (Fixes the Warnings)
+    val followingIds: List<String> = emptyList(),
+    @field:JvmField // Helps Firestore map "is" booleans correctly
+    val isOnline: Boolean = false,
+    val lastActive: Long = 0L
 )

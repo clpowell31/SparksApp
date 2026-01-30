@@ -20,9 +20,8 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.automirrored.filled.Send
 import androidx.compose.material.icons.filled.Add
-import androidx.compose.material.icons.filled.AttachFile
-import androidx.compose.material.icons.filled.Call
 import androidx.compose.material.icons.filled.CameraAlt
+import androidx.compose.material.icons.filled.Call
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.KeyboardArrowDown
 import androidx.compose.material.icons.filled.Mic
@@ -49,6 +48,7 @@ import coil.compose.AsyncImage
 import com.example.sparks.model.Message
 import com.example.sparks.model.MessageType
 import com.example.sparks.util.AudioRecorder
+import com.example.sparks.util.PresenceManager
 import com.example.sparks.util.getChatHeaderDate
 import com.example.sparks.util.isSameDay
 import com.example.sparks.viewmodel.ChatViewModel
@@ -67,7 +67,17 @@ fun ChatScreen(
     viewModel: ChatViewModel = viewModel(),
     themeViewModel: ThemeViewModel = viewModel()
 ) {
-    // 1. STATE DEFINITIONS
+    // 1. TRACK CURRENT CHAT (For Notifications)
+    DisposableEffect(chatId) {
+        PresenceManager.currentChatId = chatId
+        onDispose {
+            PresenceManager.currentChatId = null
+        }
+    }
+
+    // 1. OBSERVE DURATION & DIALOG STATE
+    val disappearingDuration by viewModel.disappearingDuration.collectAsState()
+    var showDisappearingDialog by remember { mutableStateOf(false) }
     var messageText by remember { mutableStateOf("") }
 
     val messages by viewModel.messages.collectAsState()
@@ -100,11 +110,23 @@ fun ChatScreen(
 
     // Media & Audio
     val context = LocalContext.current
+    // Note: decryptedCache is used inside MessageBubble now, not here.
+
     val photoPickerLauncher = rememberLauncherForActivityResult(
         contract = ActivityResultContracts.PickVisualMedia(),
         onResult = { uri: Uri? ->
             if (uri != null) {
-                viewModel.sendImageMessage(chatId, uri, chatName)
+                // FIX 1: Pass 'context' here, not 'chatName'
+                viewModel.sendImageMessage(chatId, uri, context)
+            }
+        }
+    )
+
+    val videoPickerLauncher = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.PickVisualMedia(),
+        onResult = { uri: Uri? ->
+            if (uri != null) {
+                viewModel.sendVideoMessage(chatId, uri, context)
             }
         }
     )
@@ -197,7 +219,6 @@ fun ChatScreen(
                         IconButton(onClick = { }) { Icon(Icons.Default.Call, contentDescription = "Call") }
                     },
                     colors = TopAppBarDefaults.topAppBarColors(
-                        // Semi-transparent top bar (Glass effect)
                         containerColor = MaterialTheme.colorScheme.surface.copy(alpha = 0.30f),
                         scrolledContainerColor = MaterialTheme.colorScheme.surface.copy(alpha = 0.25f)
                     )
@@ -257,10 +278,18 @@ fun ChatScreen(
                             shape = bubbleShape,
                             modifier = Modifier.padding(bottom = bottomSpacing),
                             onLongClick = { selectedMessageForReaction = message },
-                            onImageClick = { url ->
-                                val encoded = Base64.encodeToString(url.toByteArray(StandardCharsets.UTF_8), Base64.URL_SAFE or Base64.NO_WRAP)
-                                navController.navigate("image_viewer/$encoded")
-                            }
+                            onImageClick = { urlString ->
+                                if (message.type == MessageType.VIDEO) {
+                                    // Open Video Player
+                                    val encoded = Base64.encodeToString(urlString.toByteArray(StandardCharsets.UTF_8), Base64.URL_SAFE or Base64.NO_WRAP)
+                                    navController.navigate("video_player/$encoded")
+                                } else {
+                                    // Open Image Viewer
+                                    val encoded = Base64.encodeToString(urlString.toByteArray(StandardCharsets.UTF_8), Base64.URL_SAFE or Base64.NO_WRAP)
+                                    navController.navigate("image_viewer/$encoded")
+                                }
+                            },
+                            viewModel = viewModel // Pass VM for E2EE decryption
                         )
 
                         if (showDateHeader) {
@@ -268,6 +297,9 @@ fun ChatScreen(
                         }
                     }
                 }
+
+                // FIX 2: REMOVED THE FLOATING CODE BLOCK THAT CAUSED 'Unresolved reference message'
+                // The decryption logic is now safely inside MessageBubble.kt
 
                 // B. Reply Preview
                 if (replyingTo != null) {
@@ -281,7 +313,6 @@ fun ChatScreen(
                         .padding(horizontal = 8.dp, vertical = 0.dp),
                     verticalAlignment = Alignment.CenterVertically
                 ) {
-                    // THE PILL: Holds Emoji + Text + Camera + Mic
                     Surface(
                         shape = RoundedCornerShape(30.dp),
                         color = MaterialTheme.colorScheme.tertiary,
@@ -291,7 +322,6 @@ fun ChatScreen(
                             verticalAlignment = Alignment.CenterVertically,
                             modifier = Modifier.padding(horizontal = 4.dp)
                         ) {
-                            // 1. Emoji (Inside Left)
                             IconButton(onClick = { showStickerPicker = !showStickerPicker }) {
                                 Icon(
                                     if (showStickerPicker) Icons.Default.KeyboardArrowDown else Icons.Outlined.EmojiEmotions,
@@ -300,8 +330,6 @@ fun ChatScreen(
                                 )
                             }
 
-                            // 2. TextField
-                            // FIX: Removed invalid 'contentPadding' param and fixed 'onValueChange'
                             TextField(
                                 value = messageText,
                                 onValueChange = { newText ->
@@ -320,7 +348,6 @@ fun ChatScreen(
                                 maxLines = 4
                             )
 
-                            // 3. Camera (Inside)
                             IconButton(
                                 onClick = {
                                     photoPickerLauncher.launch(PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageOnly))
@@ -330,7 +357,15 @@ fun ChatScreen(
                                 Icon(Icons.Default.CameraAlt, contentDescription = "Camera", tint = MaterialTheme.colorScheme.onSurfaceVariant)
                             }
 
-                            // 4. Mic (Inside)
+                            IconButton(
+                                onClick = {
+                                    videoPickerLauncher.launch(PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.VideoOnly))
+                                },
+                                modifier = Modifier.size(40.dp)
+                            ) {
+                                Icon(Icons.Default.Videocam, contentDescription = "Video", tint = MaterialTheme.colorScheme.onSurfaceVariant)
+                            }
+
                             IconButton(
                                 onClick = {
                                     if (isRecording) {
@@ -354,7 +389,6 @@ fun ChatScreen(
 
                     Spacer(modifier = Modifier.width(8.dp))
 
-                    // D. Send Button (Outside Right)
                     FloatingActionButton(
                         onClick = {
                             if (messageText.isNotBlank()) {
@@ -376,7 +410,6 @@ fun ChatScreen(
                     }
                 }
 
-                // E. Stickers
                 if (showStickerPicker) {
                     StickerPicker(onStickerSelected = { url ->
                         viewModel.sendSticker(chatId, url)
@@ -417,10 +450,18 @@ fun ChatScreen(
                 dismissButton = { TextButton(onClick = { viewModel.deleteMessage(chatId, msg, false); showDeleteDialog = null }) { Text("Delete for Me") } }
             )
         }
+
+        if (showDisappearingDialog) {
+            DisappearingMessagesDialog(
+                currentDuration = disappearingDuration,
+                onDismiss = { showDisappearingDialog = false },
+                onDurationSelected = { newDuration ->
+                    viewModel.updateDisappearingDuration(chatId, newDuration / 1000L)
+                }
+            )
+        }
     }
 }
-
-// --- HELPER COMPOSABLES ---
 
 @Composable
 fun ReplyPreviewBar(message: Message, onClose: () -> Unit) {

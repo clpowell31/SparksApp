@@ -30,6 +30,25 @@ class AuthViewModel : ViewModel() {
     private val _errorMessage = MutableStateFlow<String?>(null)
     val errorMessage: StateFlow<String?> = _errorMessage
 
+    // --- NEW: ROBUST TOKEN SAVER ---
+    private fun fetchAndSaveFcmToken() {
+        com.google.firebase.messaging.FirebaseMessaging.getInstance().token.addOnCompleteListener { task ->
+            if (task.isSuccessful) {
+                val token = task.result
+                val uid = auth.currentUser?.uid ?: return@addOnCompleteListener
+
+                // Try to update existing doc
+                firestore.collection("users").document(uid)
+                    .update("fcmToken", token)
+                    .addOnFailureListener {
+                        // If doc missing, create it with just the token
+                        firestore.collection("users").document(uid)
+                            .set(mapOf("fcmToken" to token), SetOptions.merge())
+                    }
+            }
+        }
+    }
+
     // Helper function to save/update user in Firestore
     private suspend fun saveUserToFirestore(user: FirebaseUser) {
         val userMap = hashMapOf(
@@ -38,13 +57,11 @@ class AuthViewModel : ViewModel() {
             "username" to (user.email?.substringBefore("@") ?: "User")
         )
 
-        // Use SetOptions.merge() so we don't overwrite existing data if we add more fields later
         try {
             firestore.collection("users")
                 .document(user.uid)
                 .set(userMap, SetOptions.merge())
                 .await()
-            Log.d("AuthViewModel", "User saved to Firestore: ${user.email}")
         } catch (e: Exception) {
             Log.e("AuthViewModel", "Error saving user", e)
         }
@@ -73,7 +90,7 @@ class AuthViewModel : ViewModel() {
                 return@launch
             }
 
-            // NEW: Generate E2EE Keys for new user
+            // Generate E2EE Keys for new user
             val myPublicKey = CryptoManager.checkOrGenerateKeys()
 
             val newUser = User(
@@ -82,15 +99,19 @@ class AuthViewModel : ViewModel() {
                 username = username,
                 firstName = firstName,
                 lastName = lastName,
-                publicKey = myPublicKey // Save Public Key to Firestore
+                publicKey = myPublicKey
             )
 
             try {
                 // Save to Firestore
+                // NOTE: This .set() overwrites data, so we must re-save token after!
                 FirebaseFirestore.getInstance().collection("users")
                     .document(user.uid)
                     .set(newUser)
                     .await()
+
+                // RE-SAVE TOKEN NOW (Crucial step)
+                fetchAndSaveFcmToken()
 
                 onSuccess()
             } catch (e: Exception) {
@@ -109,16 +130,10 @@ class AuthViewModel : ViewModel() {
         viewModelScope.launch {
             _isLoading.value = true
             try {
-                // 1. Create a reference in Storage: "profile_images/uid.jpg"
                 val storageRef = storage.reference.child("profile_images/$uid.jpg")
-
-                // 2. Upload the file
                 storageRef.putFile(imageUri).await()
-
-                // 3. Get the Download URL
                 val downloadUrl = storageRef.downloadUrl.await()
 
-                // 4. Update Firestore User Document
                 FirebaseFirestore.getInstance().collection("users").document(uid)
                     .update("profileImageUrl", downloadUrl.toString())
                     .await()
@@ -131,16 +146,16 @@ class AuthViewModel : ViewModel() {
         }
     }
 
-    // MODIFY Sign Up: Don't write to Firestore yet!
-    // We will let the Profile Screen do that.
     fun signUp(email: String, pass: String, onSignUpSuccess: () -> Unit) {
         viewModelScope.launch {
             _isLoading.value = true
             _errorMessage.value = null
             try {
                 auth.createUserWithEmailAndPassword(email, pass).await()
-                // Do NOT create Firestore doc here anymore.
-                // Just update state and trigger callback
+
+                // SAVE TOKEN IMMEDIATELY
+                fetchAndSaveFcmToken()
+
                 _currentUser.value = auth.currentUser
                 onSignUpSuccess()
             } catch (e: Exception) {
@@ -159,14 +174,22 @@ class AuthViewModel : ViewModel() {
                 val result = auth.signInWithEmailAndPassword(email, pass).await()
                 val user = result.user
                 if (user != null) {
-                    saveUserToFirestore(user) // Save to DB (Fixes missing users)
+                    saveUserToFirestore(user)
                     _currentUser.value = user
 
-                    // NEW: Ensure E2EE Keys exist (e.g. for re-installs)
+                    // SAVE TOKEN ON LOGIN
+                    fetchAndSaveFcmToken()
+
+                    // Ensure E2EE Keys exist
                     val publicKey = CryptoManager.checkOrGenerateKeys()
                     if (publicKey != null) {
                         firestore.collection("users").document(user.uid)
                             .update("publicKey", publicKey)
+                            .addOnFailureListener {
+                                // If user doc doesn't exist for some reason, create partial
+                                firestore.collection("users").document(user.uid)
+                                    .set(mapOf("publicKey" to publicKey), SetOptions.merge())
+                            }
                     }
                 }
             } catch (e: Exception) {
@@ -177,7 +200,6 @@ class AuthViewModel : ViewModel() {
         }
     }
 
-    // Renamed from signOut to logout to match MainActivity
     fun logout() {
         auth.signOut()
         _currentUser.value = null

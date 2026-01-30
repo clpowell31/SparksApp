@@ -1,7 +1,7 @@
 package com.example.sparks.model
 
 enum class MessageType {
-    TEXT, IMAGE, AUDIO // New Type
+    TEXT, IMAGE, AUDIO, VIDEO // New Type
 }
 
 // 1. Add Status Enum
@@ -24,5 +24,7 @@ data class Message(
     val replyToText: String? = null,
     val replyToImage: String? = null, // If replying to an image
     // NEW: Map of UserID -> Encrypted AES Key
-    val encryptionKeys: Map<String, String> = emptyMap()
+    val encryptionKeys: Map<String, String> = emptyMap(),
+    // NEW: Disappearing Messages
+    val expiresAt: Long? = null // Timestamp when this message should vanish
 )

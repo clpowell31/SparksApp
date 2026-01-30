@@ -1,5 +1,9 @@
 package com.example.sparks.ui.home
 
+import android.net.Uri
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.PickVisualMediaRequest
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
@@ -24,24 +28,30 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.lifecycle.viewmodel.compose.viewModel
+import androidx.navigation.NavController
+import com.example.sparks.model.StoryType
 import com.example.sparks.viewmodel.AuthViewModel
 import com.example.sparks.viewmodel.ChatListItem
 import com.example.sparks.viewmodel.HomeViewModel
+import com.example.sparks.viewmodel.StoriesViewModel
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun HomeScreen(
+    navController: NavController, // Added NavController
     authViewModel: AuthViewModel,
     onChatClick: (String) -> Unit,
     onFabClick: () -> Unit,
     onProfileClick: () -> Unit,
     onSettingsClick: () -> Unit,
     onArchivedClick: () -> Unit,
-    homeViewModel: HomeViewModel = viewModel()
+    homeViewModel: HomeViewModel = viewModel(),
+    storiesViewModel: StoriesViewModel = viewModel() // Added StoriesViewModel
 ) {
     val chatList by homeViewModel.activeChats.collectAsState()
     val searchQuery by homeViewModel.searchQuery.collectAsState()
@@ -50,6 +60,21 @@ fun HomeScreen(
     var showMenu by remember { mutableStateOf(false) }
     var showThreadDeleteDialog by remember { mutableStateOf<String?>(null) }
     var isSearchMode by remember { mutableStateOf(false) }
+
+    // --- QUICK STORY UPLOAD (Camera FAB) ---
+    val context = LocalContext.current
+    val quickStoryPicker = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.PickVisualMedia()
+    ) { uri: Uri? ->
+        if (uri != null) {
+            // DETECT TYPE
+            val type = context.contentResolver.getType(uri)
+            val storyType = if (type?.startsWith("video/") == true) StoryType.VIDEO else StoryType.IMAGE
+
+            storiesViewModel.uploadStory(uri, storyType)
+            selectedTab = 2
+        }
+    }
 
     Scaffold(
         topBar = {
@@ -129,7 +154,7 @@ fun HomeScreen(
                         }
                     }
                 )
-            } // <--- This closing brace was missing!
+            }
         },
         bottomBar = {
             NavigationBar {
@@ -148,20 +173,24 @@ fun HomeScreen(
                 NavigationBarItem(
                     selected = selectedTab == 2,
                     onClick = { selectedTab = 2 },
-                    icon = { Icon(Icons.Outlined.PhotoCamera, contentDescription = "Stories") },
-                    label = { Text("Stories") }
+                    icon = { Icon(Icons.Outlined.PhotoCamera, contentDescription = "Sparkies") },
+                    label = { Text("Sparkies") }
                 )
             }
         },
         floatingActionButton = {
             if (selectedTab == 0) {
                 Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                    // Quick Story Upload Button
                     SmallFloatingActionButton(
-                        onClick = { },
+                        onClick = {
+                            // CHANGE THIS LINE: Allow Image AND Video
+                            quickStoryPicker.launch(PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageAndVideo))
+                        },
                         containerColor = MaterialTheme.colorScheme.secondaryContainer,
                         modifier = Modifier.padding(bottom = 16.dp)
                     ) {
-                        Icon(Icons.Default.CameraAlt, contentDescription = "Camera")
+                        Icon(Icons.Default.CameraAlt, contentDescription = "Post Story")
                     }
                     FloatingActionButton(
                         onClick = { onFabClick() },
@@ -195,6 +224,7 @@ fun HomeScreen(
         Box(modifier = Modifier.padding(paddingValues)) {
             when (selectedTab) {
                 0 -> {
+                    // --- CHATS LIST ---
                     LazyColumn(modifier = Modifier.fillMaxSize()) {
                         items(
                             items = chatList,
@@ -249,8 +279,17 @@ fun HomeScreen(
                         }
                     }
                 }
-                1 -> { Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) { Text("Calls Coming Soon") } }
-                2 -> { Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) { Text("Stories Coming Soon") } }
+                1 -> {
+                    // --- CALLS TAB ---
+                    Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+                        Text("Calls Coming Soon")
+                    }
+                }
+                2 -> {
+                    // --- STORIES TAB ---
+                    // Now calling the actual Stories Screen!
+                    StoriesScreen(navController = navController, viewModel = storiesViewModel)
+                }
             }
         }
     }
